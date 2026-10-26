@@ -795,7 +795,7 @@ export default function App() {
                   required
                   placeholder="예: 수학 문제집 2장 풀기, 영어 단어 암기"
                   value={taskForm.title}
-                  onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
+                  onChange={(e) => setTaskForm({ ...taskForm, title: Number(e.target.value) })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -804,7 +804,7 @@ export default function App() {
                 <label className="block text-xs font-bold text-slate-700 mb-1">반복 일정 선택</label>
                 <select
                   value={taskForm.type}
-                  onChange={(e) => setTaskForm({ ...taskForm, type: e.target.value })}
+                  onChange={(e) => setTaskForm({ ...taskForm, type: Number(e.target.value) })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="weekly">매주 특정 요일 반복</option>
@@ -849,7 +849,7 @@ export default function App() {
                     <input
                       type="date"
                       value={taskForm.startDate}
-                      onChange={(e) => setTaskForm({ ...taskForm, startDate: e.target.value })}
+                      onChange={(e) => setTaskForm({ ...taskForm, startDate: Number(e.target.value) })}
                       className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                     />
                   </div>
@@ -858,7 +858,7 @@ export default function App() {
                     <input
                       type="date"
                       value={taskForm.endDate}
-                      onChange={(e) => setTaskForm({ ...taskForm, endDate: e.target.value })}
+                      onChange={(e) => setTaskForm({ ...taskForm, endDate: Number(e.target.value) })}
                       className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                     />
                   </div>
@@ -883,7 +883,7 @@ export default function App() {
                         min="1"
                         required
                         value={taskForm.onTimePoints}
-                        onChange={(e) => setTaskForm({ ...taskForm, onTimePoints: e.target.value })}
+                        onChange={(e) => setTaskForm({ ...taskForm, onTimePoints: Number(e.target.value) })}
                         className="w-full text-sm p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-indigo-600"
                       />
                       <span className="text-xs font-bold text-slate-500">점</span>
@@ -900,7 +900,7 @@ export default function App() {
                         min="0"
                         required
                         value={taskForm.latePoints}
-                        onChange={(e) => setTaskForm({ ...taskForm, latePoints: e.target.value })}
+                        onChange={(e) => setTaskForm({ ...taskForm, latePoints: Number(e.target.value) })}
                         className="w-full text-sm p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-600"
                       />
                       <span className="text-xs font-bold text-slate-500">점</span>
@@ -914,7 +914,7 @@ export default function App() {
                 <input
                   type="time"
                   value={taskForm.targetTime}
-                  onChange={(e) => setTaskForm({ ...taskForm, targetTime: e.target.value })}
+                  onChange={(e) => setTaskForm({ ...taskForm, targetTime: Number(e.target.value) })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -925,7 +925,7 @@ export default function App() {
                   type="text"
                   placeholder="예: 풀이과정 쓰기, 예쁘게 정리하기"
                   value={taskForm.note}
-                  onChange={(e) => setTaskForm({ ...taskForm, note: e.target.value })}
+                  onChange={(e) => setTaskForm({ ...taskForm, note: Number(e.target.value) })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
