@@ -345,7 +345,7 @@ export default function App() {
 
   // Parent: Delete Task
   const handleDeleteTask = (taskId) => {
-    if (confirm('이 숙제를 삭제하시겠습니까?')) {
+    if (window.confirm('이 숙제를 삭제하시겠습니까?')) {
       setTasks(tasks.filter(t => t.id !== taskId));
       showToast('숙제가 삭제되었습니다.');
     }
@@ -985,7 +985,7 @@ export default function App() {
                   href={childTossId ? `https://toss.me/${childTossId}/${unpaidAllowance}` : `supertoss://send?amount=${unpaidAllowance}`}
                   onClick={() => {
                     setTimeout(() => {
-                      if (confirm('토스 송금 완료 후, 이 금액을 정산 완료 처리하시겠습니까?')) {
+                      if (window.confirm('토스 송금 완료 후, 이 금액을 정산 완료 처리하시겠습니까?')) {
                         setPaidPoints(totalEarnedPoints);
                         localStorage.setItem('kids_homework_paid_points', totalEarnedPoints.toString());
                         setIsTossModalOpen(false);
