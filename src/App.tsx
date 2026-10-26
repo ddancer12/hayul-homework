@@ -23,8 +23,8 @@ import {
 } from 'lucide-react';
 
 // ---------- Firebase CDN Imports ----------
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // ---------- Firebase Config ----------
 const firebaseConfig = {
