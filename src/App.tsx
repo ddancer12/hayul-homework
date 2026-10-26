@@ -19,11 +19,51 @@ import {
   ChevronRight,
   Edit3,
   Lock,
-  Unlock,
-  Copy,
-  DollarSign,
-  Info
+  Copy
 } from 'lucide-react';
+
+// ---------- Types ----------
+type Role = 'child' | 'parent';
+type TaskType = 'weekly' | 'period' | 'onetime';
+type TaskStatus = 'pending' | 'submitted' | 'approved' | 'revision';
+
+interface Task {
+  id: string;
+  title: string;
+  type: TaskType;
+  days: number[];
+  startDate: string;
+  endDate: string;
+  targetTime: string;
+  onTimePoints: number;
+  latePoints: number;
+  status: TaskStatus;
+  submittedAt: string | null;
+  isOnTime: boolean;
+  earnedPoints: number;
+  note: string;
+}
+
+interface PointLog {
+  id: string;
+  taskTitle: string;
+  points: number;
+  date: string;
+  time: string;
+  type: string;
+}
+
+interface TaskForm {
+  title: string;
+  type: TaskType;
+  days: number[];
+  startDate: string;
+  endDate: string;
+  targetTime: string;
+  onTimePoints: number;
+  latePoints: number;
+  note: string;
+}
 
 // Days of week helper
 const DAYS = [
@@ -38,10 +78,10 @@ const DAYS = [
 
 export default function App() {
   // Current Active Day
-  const [selectedDay, setSelectedDay] = useState(new Date().getDay());
+  const [selectedDay, setSelectedDay] = useState<number>(new Date().getDay());
 
   // Role State: 'child' | 'parent'
-  const [role, setRole] = useState('child');
+  const [role, setRole] = useState<Role>('child');
   const [parentPin, setParentPin] = useState('0000');
   const [inputPin, setInputPin] = useState('');
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
@@ -55,14 +95,14 @@ export default function App() {
   // Toast Notification
   const [toastMessage, setToastMessage] = useState('');
 
-  const showToast = (msg) => {
+  const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(''), 3000);
   };
 
   // Homework Tasks Array
   // Statuses: 'pending' | 'submitted' | 'approved' | 'revision'
-  const [tasks, setTasks] = useState(() => {
+  const [tasks, setTasks] = useState<Task[]>(() => {
     const saved = localStorage.getItem('kids_homework_tasks_v2');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) { console.error(e); }
@@ -71,7 +111,7 @@ export default function App() {
       {
         id: '1',
         title: '수학 문제집 2장 풀기',
-        type: 'weekly', // 'weekly' | 'period' | 'onetime'
+        type: 'weekly',
         days: [1, 2, 3, 4, 5], // Mon-Fri
         startDate: '',
         endDate: '',
@@ -105,6 +145,8 @@ export default function App() {
         title: '방 청소 및 책상 정리하기',
         type: 'onetime',
         days: [new Date().getDay()],
+        startDate: '',
+        endDate: '',
         targetTime: '20:00',
         onTimePoints: 3,
         latePoints: 1,
@@ -118,7 +160,7 @@ export default function App() {
   });
 
   // Point History Log
-  const [pointLogs, setPointLogs] = useState(() => {
+  const [pointLogs, setPointLogs] = useState<PointLog[]>(() => {
     const saved = localStorage.getItem('kids_homework_point_logs');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) { console.error(e); }
@@ -128,12 +170,12 @@ export default function App() {
 
   // Modal Controls
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isTossModalOpen, setIsTossModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // New Homework Form State
-  const [taskForm, setTaskForm] = useState({
+  const [taskForm, setTaskForm] = useState<TaskForm>({
     title: '',
     type: 'weekly',
     days: [1, 2, 3, 4, 5],
@@ -185,7 +227,7 @@ export default function App() {
   };
 
   // Switch Role Handler with PIN check
-  const handleRoleSwitch = (targetRole) => {
+  const handleRoleSwitch = (targetRole: Role) => {
     if (targetRole === 'parent' && role === 'child') {
       setIsPinModalOpen(true);
     } else {
@@ -193,7 +235,7 @@ export default function App() {
     }
   };
 
-  const handleVerifyPin = (e) => {
+  const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
     if (inputPin === parentPin || inputPin === '0000') {
       setRole('parent');
@@ -201,19 +243,19 @@ export default function App() {
       setInputPin('');
       showToast('부모 모드로 전환되었습니다.');
     } else {
-      alert('비밀번호가 일치하지 않습니다. (기본 비밀번호: 0000)');
+      window.alert('비밀번호가 일치하지 않습니다. (기본 비밀번호: 0000)');
     }
   };
 
   // Child: Submit Homework
-  const handleChildSubmit = (taskId) => {
+  const handleChildSubmit = (taskId: string) => {
     const currentTime = getCurrentTimeStr();
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
         const isOnTime = currentTime <= t.targetTime;
         return {
           ...t,
-          status: 'submitted',
+          status: 'submitted' as TaskStatus,
           submittedAt: currentTime,
           isOnTime: isOnTime
         };
@@ -224,7 +266,7 @@ export default function App() {
   };
 
   // Parent: Approve Homework & Award Points
-  const handleParentApprove = (taskId) => {
+  const handleParentApprove = (taskId: string) => {
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
         // Points Calculation Rule:
@@ -233,7 +275,7 @@ export default function App() {
         const pointsAwarded = isFullPoints ? (t.onTimePoints || 3) : (t.latePoints || 1);
 
         // Add Log
-        const newLog = {
+        const newLog: PointLog = {
           id: Date.now().toString(),
           taskTitle: t.title,
           points: pointsAwarded,
@@ -245,7 +287,7 @@ export default function App() {
 
         return {
           ...t,
-          status: 'approved',
+          status: 'approved' as TaskStatus,
           earnedPoints: (t.earnedPoints || 0) + pointsAwarded
         };
       }
@@ -255,12 +297,12 @@ export default function App() {
   };
 
   // Parent: Put on Hold (재수정 요청)
-  const handleParentHold = (taskId) => {
+  const handleParentHold = (taskId: string) => {
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
         return {
           ...t,
-          status: 'revision'
+          status: 'revision' as TaskStatus
         };
       }
       return t;
@@ -269,7 +311,7 @@ export default function App() {
   };
 
   // Parent: Create or Update Task
-  const handleSaveTask = (e) => {
+  const handleSaveTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!taskForm.title.trim()) return;
 
@@ -288,7 +330,7 @@ export default function App() {
       } : t));
       showToast('숙제 정보가 수정되었습니다.');
     } else {
-      const newTask = {
+      const newTask: Task = {
         id: Date.now().toString(),
         title: taskForm.title,
         type: taskForm.type,
@@ -327,7 +369,7 @@ export default function App() {
     });
   };
 
-  const openEditTask = (task) => {
+  const openEditTask = (task: Task) => {
     setEditingTask(task);
     setTaskForm({
       title: task.title,
@@ -344,7 +386,7 @@ export default function App() {
   };
 
   // Parent: Delete Task
-  const handleDeleteTask = (taskId) => {
+  const handleDeleteTask = (taskId: string) => {
     if (window.confirm('이 숙제를 삭제하시겠습니까?')) {
       setTasks(tasks.filter(t => t.id !== taskId));
       showToast('숙제가 삭제되었습니다.');
@@ -368,7 +410,7 @@ export default function App() {
       return task.days.includes(selectedDay);
     } else if (task.type === 'period') {
       const todayStr = new Date().toISOString().split('T')[0];
-      return task.startDate <= todayStr && todayStr <= task.endDate;
+      return (task.startDate || '') <= todayStr && todayStr <= (task.endDate || '');
     } else {
       return true; // Single Date / Urgent Task shown across views
     }
@@ -795,7 +837,7 @@ export default function App() {
                   required
                   placeholder="예: 수학 문제집 2장 풀기, 영어 단어 암기"
                   value={taskForm.title}
-                  onChange={(e) => setTaskForm({ ...taskForm, title: Number(e.target.value) })}
+                  onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -804,7 +846,7 @@ export default function App() {
                 <label className="block text-xs font-bold text-slate-700 mb-1">반복 일정 선택</label>
                 <select
                   value={taskForm.type}
-                  onChange={(e) => setTaskForm({ ...taskForm, type: Number(e.target.value) })}
+                  onChange={(e) => setTaskForm({ ...taskForm, type: e.target.value as TaskType })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="weekly">매주 특정 요일 반복</option>
@@ -849,7 +891,7 @@ export default function App() {
                     <input
                       type="date"
                       value={taskForm.startDate}
-                      onChange={(e) => setTaskForm({ ...taskForm, startDate: Number(e.target.value) })}
+                      onChange={(e) => setTaskForm({ ...taskForm, startDate: e.target.value })}
                       className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                     />
                   </div>
@@ -858,7 +900,7 @@ export default function App() {
                     <input
                       type="date"
                       value={taskForm.endDate}
-                      onChange={(e) => setTaskForm({ ...taskForm, endDate: Number(e.target.value) })}
+                      onChange={(e) => setTaskForm({ ...taskForm, endDate: e.target.value })}
                       className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                     />
                   </div>
@@ -914,7 +956,7 @@ export default function App() {
                 <input
                   type="time"
                   value={taskForm.targetTime}
-                  onChange={(e) => setTaskForm({ ...taskForm, targetTime: Number(e.target.value) })}
+                  onChange={(e) => setTaskForm({ ...taskForm, targetTime: e.target.value })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -925,7 +967,7 @@ export default function App() {
                   type="text"
                   placeholder="예: 풀이과정 쓰기, 예쁘게 정리하기"
                   value={taskForm.note}
-                  onChange={(e) => setTaskForm({ ...taskForm, note: Number(e.target.value) })}
+                  onChange={(e) => setTaskForm({ ...taskForm, note: e.target.value })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
