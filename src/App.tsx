@@ -17,6 +17,7 @@ import {
   Sparkles,
   Settings,
   ChevronRight,
+  ChevronLeft,
   Edit3,
   Lock,
   Copy
@@ -53,20 +54,65 @@ interface Task {
   targetTime: string;
   onTimePoints: number;
   latePoints: number;
+  note: string;
+  createdDate: string; // 'YYYY-MM-DD' - 이 날짜부터 숙제가 나타남
+  // 예전 버전에서 쓰던 값 (한 번 기록으로 옮긴 뒤에는 사용하지 않음)
+  status?: TaskStatus;
+  submittedAt?: string | null;
+  isOnTime?: boolean;
+  earnedPoints?: number;
+  wasRevised?: boolean;
+}
+
+// 날짜별 숙제 기록 (같은 숙제도 날짜마다 따로 기록)
+interface HwRecord {
+  key: string; // `${taskId}_${date}`
+  taskId: string;
+  date: string;
+  status: TaskStatus | 'dismissed'; // dismissed = 그 날짜 것만 삭제
+  submittedAt: string | null;
+  isOnTime: boolean;
+  earnedPoints: number;
+  wasRevised: boolean;
+  approvedDate: string | null; // 승인한 날짜 (다음 날 화면에서 사라짐)
+}
+
+// 화면에 보여주는 숙제 1건 = 숙제 정의 + 그 날짜의 진행 상태
+interface Occurrence extends Task {
+  key: string;
+  date: string;
   status: TaskStatus;
   submittedAt: string | null;
   isOnTime: boolean;
   earnedPoints: number;
-  note: string;
+  wasRevised: boolean;
+}
+
+interface BankInfo {
+  bank: string;
+  account: string;
+  owner: string;
+}
+
+interface SyncData {
+  tasks: Task[];
+  records: HwRecord[];
+  pointLogs: PointLog[];
+  paidPoints: number;
+  pointRate: number;
+  childTossId: string;
+  childBankInfo: BankInfo;
+  parentPin: string;
 }
 
 interface PointLog {
-  id: string;
+  id: string; // 생성 시각(ms) - 월간 통계에 사용
   taskTitle: string;
   points: number;
   date: string;
   time: string;
   type: string;
+  kind?: 'homework' | 'sticker';
 }
 
 interface TaskForm {
@@ -92,64 +138,120 @@ const DAYS = [
   { key: 0, name: '일', full: '일요일' },
 ];
 
+// ---------- 날짜 헬퍼 (기기의 현지 시간 기준) ----------
+const WEEKDAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
+
+const toDateStr = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const parseDateStr = (ds: string): Date => {
+  const [y, m, d] = ds.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
+const addDaysStr = (ds: string, n: number): string => {
+  const dt = parseDateStr(ds);
+  dt.setDate(dt.getDate() + n);
+  return toDateStr(dt);
+};
+
+const weekdayOf = (ds: string): number => parseDateStr(ds).getDay();
+
+const formatDateLabel = (ds: string): string => {
+  const dt = parseDateStr(ds);
+  return `${dt.getMonth() + 1}/${dt.getDate()}(${WEEKDAY_NAMES[dt.getDay()]})`;
+};
+
+// 오늘로부터 몇 일 전까지의 밀린 숙제를 보여줄지
+const LOOKBACK_DAYS = 60;
+
+// 그 날짜에 해당 숙제가 나타나는지
+const isActiveOn = (task: Task, ds: string, fallbackCreated: string): boolean => {
+  const created = task.createdDate || fallbackCreated;
+  if (ds < created) return false;
+  if (task.type === 'weekly') return task.days.includes(weekdayOf(ds));
+  if (task.type === 'period') return (task.startDate || '') <= ds && ds <= (task.endDate || '');
+  return ds === created; // onetime: 만든 날에만 생성 (이후엔 미완료로 계속 남음)
+};
+
+// 예전 형식(상태가 숙제 안에 들어있던) 데이터를 새 형식으로
+const stripLegacy = (t: Task, today: string): Task => ({
+  id: t.id,
+  title: t.title,
+  type: t.type,
+  days: t.days || [],
+  startDate: t.startDate || '',
+  endDate: t.endDate || '',
+  targetTime: t.targetTime || '18:00',
+  onTimePoints: t.onTimePoints || 3,
+  latePoints: t.latePoints || 1,
+  note: t.note || '',
+  createdDate: today
+});
+
 // 기본 숙제 (Firestore에 데이터가 없을 때 초기값)
-const createDefaultTasks = (): Task[] => [
-  {
-    id: '1',
-    title: '수학 문제집 2장 풀기',
-    type: 'weekly',
-    days: [1, 2, 3, 4, 5],
-    startDate: '',
-    endDate: '',
-    targetTime: '17:00',
-    onTimePoints: 3,
-    latePoints: 1,
-    status: 'pending',
-    submittedAt: null,
-    isOnTime: false,
-    earnedPoints: 0,
-    note: '풀이 과정 꼭 적기!'
-  },
-  {
-    id: '2',
-    title: '영어 단어 10개 암기 및 시험',
-    type: 'weekly',
-    days: [1, 3, 5],
-    startDate: '',
-    endDate: '',
-    targetTime: '18:30',
-    onTimePoints: 5,
-    latePoints: 2,
-    status: 'pending',
-    submittedAt: null,
-    isOnTime: false,
-    earnedPoints: 0,
-    note: '단어장 테스트 체크'
-  },
-  {
-    id: '3',
-    title: '방 청소 및 책상 정리하기',
-    type: 'onetime',
-    days: [new Date().getDay()],
-    startDate: '',
-    endDate: '',
-    targetTime: '20:00',
-    onTimePoints: 3,
-    latePoints: 1,
-    status: 'pending',
-    submittedAt: null,
-    isOnTime: false,
-    earnedPoints: 0,
-    note: '돌발 숙제! 서랍 정리 포함'
-  }
-];
+const createDefaultTasks = (): Task[] => {
+  const today = toDateStr(new Date());
+  return [
+    {
+      id: '1',
+      title: '수학 문제집 2장 풀기',
+      type: 'weekly',
+      days: [1, 2, 3, 4, 5],
+      startDate: '',
+      endDate: '',
+      targetTime: '17:00',
+      onTimePoints: 3,
+      latePoints: 1,
+      note: '풀이 과정 꼭 적기!',
+      createdDate: today
+    },
+    {
+      id: '2',
+      title: '영어 단어 10개 암기 및 시험',
+      type: 'weekly',
+      days: [1, 3, 5],
+      startDate: '',
+      endDate: '',
+      targetTime: '18:30',
+      onTimePoints: 5,
+      latePoints: 2,
+      note: '단어장 테스트 체크',
+      createdDate: today
+    },
+    {
+      id: '3',
+      title: '방 청소 및 책상 정리하기',
+      type: 'onetime',
+      days: [new Date().getDay()],
+      startDate: '',
+      endDate: '',
+      targetTime: '20:00',
+      onTimePoints: 3,
+      latePoints: 1,
+      note: '돌발 숙제! 서랍 정리 포함',
+      createdDate: today
+    }
+  ];
+};
 
 export default function App() {
   // Current Active Day
   const [selectedDay, setSelectedDay] = useState<number>(new Date().getDay());
 
   // Role State: 'child' | 'parent'
-  const [role, setRole] = useState<Role>('child');
+  // 부모/아이 모드는 이 기기에만 기억 (새로고침해도 유지)
+  const [role, setRole] = useState<Role>(() => {
+    try {
+      return localStorage.getItem('kids_homework_role') === 'parent' ? 'parent' : 'child';
+    } catch (e) {
+      return 'child';
+    }
+  });
   const [parentPin, setParentPin] = useState('0000');
   const [inputPin, setInputPin] = useState('');
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
@@ -157,7 +259,7 @@ export default function App() {
   // Settings & Allowance config
   const [pointRate, setPointRate] = useState(100); // 1 point = 100 KRW
   const [childTossId, setChildTossId] = useState('');
-  const [childBankInfo, setChildBankInfo] = useState({ bank: '토스뱅크', account: '1000-1234-5678', owner: '아이 이름' });
+  const [childBankInfo, setChildBankInfo] = useState<BankInfo>({ bank: '토스뱅크', account: '1000-1234-5678', owner: '아이 이름' });
   const [paidPoints, setPaidPoints] = useState(0);
 
   // Toast Notification
@@ -170,6 +272,8 @@ export default function App() {
 
   // Homework Tasks Array
   const [tasks, setTasks] = useState<Task[]>(createDefaultTasks);
+  const [records, setRecords] = useState<HwRecord[]>([]);
+  const [, setTick] = useState(0); // 날짜 변경 감지용
 
   // Point History Log
   const [pointLogs, setPointLogs] = useState<PointLog[]>([]);
@@ -180,18 +284,41 @@ export default function App() {
   const [isTossModalOpen, setIsTossModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
+  // 재결재 포인트 선택 / 칭찬 스티커 / 월간 통계
+  const [approvalTarget, setApprovalTarget] = useState<Occurrence | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string; type: TaskType; date: string | null } | null>(null);
+  const [customPoints, setCustomPoints] = useState('');
+  const [isStickerOpen, setIsStickerOpen] = useState(false);
+  const [stickerForm, setStickerForm] = useState({ points: '1', reason: '' });
+  const [statsMonth, setStatsMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+
   // New Homework Form State
   const [taskForm, setTaskForm] = useState<TaskForm>({
     title: '',
     type: 'weekly',
     days: [1, 2, 3, 4, 5],
-    startDate: new Date().toISOString().split('T')[0],
-    endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    startDate: toDateStr(new Date()),
+    endDate: toDateStr(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
     targetTime: '18:00',
     onTimePoints: 3,
     latePoints: 1,
     note: ''
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('kids_homework_role', role);
+    } catch (e) {}
+  }, [role]);
+
+  // 날짜가 바뀌면 화면 갱신 (1분마다 확인)
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(id);
+  }, []);
 
   // ---------- Firebase Realtime Sync (Firestore) ----------
   useEffect(() => {
@@ -201,17 +328,57 @@ export default function App() {
       (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
-          if (data.tasks) setTasks(data.tasks);
+          const today = toDateStr(new Date());
+          const rawTasks: Task[] = data.tasks || [];
+          const newRecords: HwRecord[] = [...(data.records || [])];
+          const migratedIds: string[] = [];
+
+          // 예전 데이터(날짜 없는 숙제)를 새 형식으로 한 번 변환
+          const normalizedTasks: Task[] = rawTasks.map((t) => {
+            if (t.createdDate) return t;
+            migratedIds.push(t.id);
+            if (t.status && t.status !== 'pending') {
+              newRecords.push({
+                key: `${t.id}_${today}`,
+                taskId: t.id,
+                date: today,
+                status: t.status,
+                submittedAt: t.submittedAt || null,
+                isOnTime: !!t.isOnTime,
+                earnedPoints: t.earnedPoints || 0,
+                wasRevised: !!t.wasRevised,
+                approvedDate: t.status === 'approved' ? today : null
+              });
+            }
+            return stripLegacy(t, today);
+          });
+
+          setTasks(normalizedTasks);
+          setRecords(newRecords);
           if (data.pointLogs) setPointLogs(data.pointLogs);
           if (data.paidPoints !== undefined) setPaidPoints(data.paidPoints);
           if (data.pointRate !== undefined) setPointRate(data.pointRate);
           if (data.childTossId !== undefined) setChildTossId(data.childTossId);
           if (data.childBankInfo) setChildBankInfo(data.childBankInfo);
           if (data.parentPin) setParentPin(data.parentPin);
+
+          if (migratedIds.length > 0) {
+            setDoc(docRef, {
+              tasks: normalizedTasks,
+              records: newRecords,
+              pointLogs: data.pointLogs || [],
+              paidPoints: data.paidPoints ?? 0,
+              pointRate: data.pointRate ?? 100,
+              childTossId: data.childTossId ?? '',
+              childBankInfo: data.childBankInfo || { bank: '토스뱅크', account: '1000-1234-5678', owner: '아이 이름' },
+              parentPin: data.parentPin || '0000'
+            }).catch((error) => console.error('Firebase migrate error: ', error));
+          }
         } else {
           // 데이터가 없으면 초기값 저장
           setDoc(docRef, {
             tasks: createDefaultTasks(),
+            records: [],
             pointLogs: [],
             paidPoints: 0,
             pointRate: 100,
@@ -229,32 +396,33 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 데이터 변경 시 Firebase에 저장
-  const syncToFirebase = (
-    newTasks: Task[],
-    newLogs: PointLog[],
-    newPaid: number,
-    newRate: number,
-    newToss: string,
-    newBank: typeof childBankInfo,
-    newPin: string
-  ) => {
+  // 데이터 변경 시 Firebase에 저장 (바뀐 값만 overrides로 넘기면 나머지는 현재 값 사용)
+  const syncToFirebase = (overrides: Partial<SyncData> = {}) => {
+    const data: SyncData = {
+      tasks,
+      records,
+      pointLogs,
+      paidPoints,
+      pointRate,
+      childTossId,
+      childBankInfo,
+      parentPin,
+      ...overrides
+    };
+    // 오래된 기록은 정리 (표시 기간보다 조금 더 보관)
+    const cutoff = toDateStr(new Date(Date.now() - (LOOKBACK_DAYS + 2) * 24 * 60 * 60 * 1000));
     const docRef = doc(db, 'homework_data', 'main');
     setDoc(docRef, {
-      tasks: newTasks,
-      pointLogs: newLogs,
-      paidPoints: newPaid,
-      pointRate: newRate,
-      childTossId: newToss,
-      childBankInfo: newBank,
-      parentPin: newPin
+      ...data,
+      records: data.records.filter(r => r.date >= cutoff)
     }, { merge: true }).catch((error) => {
       console.error('Firebase sync error: ', error);
     });
   };
 
   // Total Points Calculation
-  const totalEarnedPoints = tasks.reduce((sum, t) => sum + (t.earnedPoints || 0), 0);
+  // 총 포인트는 지급 기록(숙제 승인 + 칭찬 스티커)의 합계
+  const totalEarnedPoints = pointLogs.reduce((sum, l) => sum + (l.points || 0), 0);
   const unpaidPoints = Math.max(0, totalEarnedPoints - paidPoints);
   const unpaidAllowance = unpaidPoints * pointRate;
 
@@ -285,73 +453,118 @@ export default function App() {
     }
   };
 
-  // Child: Submit Homework
-  const handleChildSubmit = (taskId: string) => {
+  // ---------- 날짜별 숙제 기록 ----------
+  const todayStr = toDateStr(new Date());
+
+  // 자정이 지나 날짜가 바뀌면 요일 탭도 오늘로 이동
+  useEffect(() => {
+    setSelectedDay(new Date().getDay());
+  }, [todayStr]);
+
+  // 특정 날짜의 숙제 기록을 갱신한 새 배열을 반환
+  const upsertRecord = (taskId: string, date: string, patch: Partial<HwRecord>): HwRecord[] => {
+    const key = `${taskId}_${date}`;
+    const base: HwRecord = records.find(r => r.key === key) || {
+      key,
+      taskId,
+      date,
+      status: 'pending',
+      submittedAt: null,
+      isOnTime: false,
+      earnedPoints: 0,
+      wasRevised: false,
+      approvedDate: null
+    };
+    return [...records.filter(r => r.key !== key), { ...base, ...patch }];
+  };
+
+  // Child: Submit Homework (밀린 숙제를 나중에 제출하면 시간 초과로 처리)
+  const handleChildSubmit = (occ: Occurrence) => {
     const currentTime = getCurrentTimeStr();
-    const updatedTasks = tasks.map(t => {
-      if (t.id === taskId) {
-        const isOnTime = currentTime <= t.targetTime;
-        return {
-          ...t,
-          status: 'submitted' as TaskStatus,
-          submittedAt: currentTime,
-          isOnTime: isOnTime
-        };
-      }
-      return t;
+    const isOnTime = occ.date === todayStr && currentTime <= occ.targetTime;
+    const newRecords = upsertRecord(occ.id, occ.date, {
+      status: 'submitted',
+      submittedAt: currentTime,
+      isOnTime
     });
-    setTasks(updatedTasks);
-    syncToFirebase(updatedTasks, pointLogs, paidPoints, pointRate, childTossId, childBankInfo, parentPin);
+    setRecords(newRecords);
+    syncToFirebase({ records: newRecords });
     showToast('숙제를 제출했습니다! 부모님 검수를 기다려주세요.');
   };
 
-  // Parent: Approve Homework & Award Points
-  const handleParentApprove = (taskId: string) => {
-    let updatedLogs = [...pointLogs];
-    const updatedTasks = tasks.map(t => {
-      if (t.id === taskId) {
-        const isFullPoints = t.isOnTime && t.status !== 'revision';
-        const pointsAwarded = isFullPoints ? (t.onTimePoints || 3) : (t.latePoints || 1);
+  // Parent: Approve Homework with chosen points
+  const approveWithPoints = (occ: Occurrence, points: number) => {
+    let typeLabel = '직접 지정';
+    if (points === 0) typeLabel = '포인트 없음';
+    else if (points === (occ.onTimePoints || 3)) typeLabel = occ.wasRevised ? '재수정 후 전체 지급' : '정시 완수 (전체)';
+    else if (points === (occ.latePoints || 1)) typeLabel = occ.wasRevised ? '재수정 후 부분 지급' : '지연 완수 (부분)';
 
-        const newLog: PointLog = {
-          id: Date.now().toString(),
-          taskTitle: t.title,
-          points: pointsAwarded,
-          date: new Date().toLocaleDateString('ko-KR'),
-          time: getCurrentTimeStr(),
-          type: isFullPoints ? '정시 완수 (전체)' : '지연/수정 완수 (부분)'
-        };
-        updatedLogs = [newLog, ...updatedLogs];
-
-        return {
-          ...t,
-          status: 'approved' as TaskStatus,
-          earnedPoints: (t.earnedPoints || 0) + pointsAwarded
-        };
-      }
-      return t;
+    const newLog: PointLog = {
+      id: Date.now().toString(),
+      taskTitle: occ.title,
+      points,
+      date: new Date().toLocaleDateString('ko-KR'),
+      time: getCurrentTimeStr(),
+      type: typeLabel,
+      kind: 'homework'
+    };
+    const updatedLogs = [newLog, ...pointLogs];
+    const newRecords = upsertRecord(occ.id, occ.date, {
+      status: 'approved',
+      earnedPoints: points,
+      approvedDate: todayStr
     });
 
-    setTasks(updatedTasks);
+    setRecords(newRecords);
     setPointLogs(updatedLogs);
-    syncToFirebase(updatedTasks, updatedLogs, paidPoints, pointRate, childTossId, childBankInfo, parentPin);
-    showToast('숙제를 승인하고 포인트를 지급했습니다! 🎉');
+    syncToFirebase({ records: newRecords, pointLogs: updatedLogs });
+    setApprovalTarget(null);
+    setCustomPoints('');
+    showToast(points > 0 ? '숙제를 승인하고 포인트를 지급했습니다! 🎉' : '숙제를 승인했습니다. (포인트 없음)');
+  };
+
+  // 승인 버튼: 시간 내 + 첫 제출이면 바로 전체 포인트, 아니면 포인트 선택창
+  const requestApprove = (occ: Occurrence) => {
+    if (occ.isOnTime && !occ.wasRevised) {
+      approveWithPoints(occ, occ.onTimePoints || 3);
+    } else {
+      setCustomPoints('');
+      setApprovalTarget(occ);
+    }
   };
 
   // Parent: Put on Hold (재수정 요청)
-  const handleParentHold = (taskId: string) => {
-    const updatedTasks = tasks.map(t => {
-      if (t.id === taskId) {
-        return {
-          ...t,
-          status: 'revision' as TaskStatus
-        };
-      }
-      return t;
+  const handleParentHold = (occ: Occurrence) => {
+    const newRecords = upsertRecord(occ.id, occ.date, {
+      status: 'revision',
+      wasRevised: true
     });
-    setTasks(updatedTasks);
-    syncToFirebase(updatedTasks, pointLogs, paidPoints, pointRate, childTossId, childBankInfo, parentPin);
+    setRecords(newRecords);
+    syncToFirebase({ records: newRecords });
     showToast('숙제를 보류 처리했습니다. 아이가 다시 수정 후 제출합니다.');
+  };
+
+  // Parent: 칭찬 스티커 (숙제와 상관없이 포인트 지급)
+  const handleGiveSticker = (e: React.FormEvent) => {
+    e.preventDefault();
+    const points = Math.floor(Number(stickerForm.points));
+    if (!(points > 0)) return;
+
+    const newLog: PointLog = {
+      id: Date.now().toString(),
+      taskTitle: stickerForm.reason.trim() || '칭찬 스티커',
+      points,
+      date: new Date().toLocaleDateString('ko-KR'),
+      time: getCurrentTimeStr(),
+      type: '칭찬 스티커',
+      kind: 'sticker'
+    };
+    const updatedLogs = [newLog, ...pointLogs];
+    setPointLogs(updatedLogs);
+    syncToFirebase({ pointLogs: updatedLogs });
+    setIsStickerOpen(false);
+    setStickerForm({ points: '1', reason: '' });
+    showToast('칭찬 포인트를 선물했어요! ⭐');
   };
 
   // Parent: Create or Update Task
@@ -359,7 +572,7 @@ export default function App() {
     e.preventDefault();
     if (!taskForm.title.trim()) return;
 
-    let updatedTasks: Task[] = [...tasks];
+    let updatedTasks: Task[];
     if (editingTask) {
       updatedTasks = tasks.map(t => t.id === editingTask.id ? {
         ...t,
@@ -385,18 +598,15 @@ export default function App() {
         targetTime: taskForm.targetTime,
         onTimePoints: Number(taskForm.onTimePoints),
         latePoints: Number(taskForm.latePoints),
-        status: 'pending',
-        submittedAt: null,
-        isOnTime: false,
-        earnedPoints: 0,
-        note: taskForm.note
+        note: taskForm.note,
+        createdDate: todayStr
       };
       updatedTasks = [...tasks, newTask];
-      showToast('새 숙제가 등록되었습니다!');
+      showToast(taskForm.type === 'weekly' ? '새 숙제가 등록되었습니다! 해당 요일부터 나타나요.' : '새 숙제가 등록되었습니다!');
     }
 
     setTasks(updatedTasks);
-    syncToFirebase(updatedTasks, pointLogs, paidPoints, pointRate, childTossId, childBankInfo, parentPin);
+    syncToFirebase({ tasks: updatedTasks });
     resetTaskForm();
     setIsAddTaskOpen(false);
   };
@@ -407,8 +617,8 @@ export default function App() {
       title: '',
       type: 'weekly',
       days: [1, 2, 3, 4, 5],
-      startDate: new Date().toISOString().split('T')[0],
-      endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      startDate: toDateStr(new Date()),
+      endDate: toDateStr(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
       targetTime: '18:00',
       onTimePoints: 3,
       latePoints: 1,
@@ -422,8 +632,8 @@ export default function App() {
       title: task.title,
       type: task.type,
       days: task.days || [1, 2, 3, 4, 5],
-      startDate: task.startDate || new Date().toISOString().split('T')[0],
-      endDate: task.endDate || new Date().toISOString().split('T')[0],
+      startDate: task.startDate || toDateStr(new Date()),
+      endDate: task.endDate || toDateStr(new Date()),
       targetTime: task.targetTime || '18:00',
       onTimePoints: task.onTimePoints || 3,
       latePoints: task.latePoints || 1,
@@ -432,43 +642,129 @@ export default function App() {
     setIsAddTaskOpen(true);
   };
 
-  // Parent: Delete Task
-  const handleDeleteTask = (taskId: string) => {
-    if (window.confirm('이 숙제를 삭제하시겠습니까?')) {
-      const updatedTasks = tasks.filter(t => t.id !== taskId);
+  // Parent: Delete (이 날짜만 / 숙제 전체)
+  const confirmDelete = (scope: 'one' | 'all') => {
+    if (!deleteTarget) return;
+    if (scope === 'one' && deleteTarget.date) {
+      const newRecords = upsertRecord(deleteTarget.id, deleteTarget.date, {
+        status: 'dismissed',
+        approvedDate: null
+      });
+      setRecords(newRecords);
+      syncToFirebase({ records: newRecords });
+      showToast('이 날짜의 숙제를 삭제했습니다.');
+    } else {
+      const updatedTasks = tasks.filter(t => t.id !== deleteTarget.id);
+      const newRecords = records.filter(r => r.taskId !== deleteTarget.id);
       setTasks(updatedTasks);
-      syncToFirebase(updatedTasks, pointLogs, paidPoints, pointRate, childTossId, childBankInfo, parentPin);
+      setRecords(newRecords);
+      syncToFirebase({ tasks: updatedTasks, records: newRecords });
       showToast('숙제가 삭제되었습니다.');
     }
+    setDeleteTarget(null);
   };
 
   // Settle: 지금까지 획득한 포인트를 모두 정산 처리
   const markAllPaid = () => {
     setPaidPoints(totalEarnedPoints);
-    syncToFirebase(tasks, pointLogs, totalEarnedPoints, pointRate, childTossId, childBankInfo, parentPin);
+    syncToFirebase({ paidPoints: totalEarnedPoints });
   };
 
   // Save Settings
   const handleSaveSettings = () => {
-    syncToFirebase(tasks, pointLogs, paidPoints, pointRate, childTossId, childBankInfo, parentPin);
+    syncToFirebase();
     setIsSettingsOpen(false);
     showToast('설정이 저장되었습니다.');
   };
 
-  // Filter Tasks for Selected Day
-  const filteredTasks = tasks.filter(task => {
-    if (task.type === 'weekly') {
-      return task.days.includes(selectedDay);
-    } else if (task.type === 'period') {
-      const todayStr = new Date().toISOString().split('T')[0];
-      return (task.startDate || '') <= todayStr && todayStr <= (task.endDate || '');
-    } else {
-      return true; // Single Date / Urgent Task shown across views
+  // ---------- 화면에 보여줄 숙제 목록 (날짜 규칙) ----------
+  // - 오늘 해당하는 숙제는 항상 표시
+  // - 지난 날짜의 숙제는 승인 전(미제출/제출/보류)이면 계속 표시
+  // - 승인된 숙제는 승인한 날에만 표시되고 다음 날부터 사라짐
+  const occurrences: Occurrence[] = [];
+  const recordMap = new Map<string, HwRecord>();
+  records.forEach(r => recordMap.set(r.key, r));
+  const lookbackStart = addDaysStr(todayStr, -LOOKBACK_DAYS);
+
+  tasks.forEach(task => {
+    const created = task.createdDate || todayStr;
+    const from = created > lookbackStart ? created : lookbackStart;
+    for (let ds = from; ds <= todayStr; ds = addDaysStr(ds, 1)) {
+      if (!isActiveOn(task, ds, todayStr)) continue;
+      const key = `${task.id}_${ds}`;
+      const rec = recordMap.get(key);
+      const status: TaskStatus | 'dismissed' = rec ? rec.status : 'pending';
+      if (status === 'dismissed') continue;
+      if (status === 'approved' && !(rec && rec.approvedDate === todayStr)) continue;
+      occurrences.push({
+        ...task,
+        key,
+        date: ds,
+        status,
+        submittedAt: rec ? rec.submittedAt : null,
+        isOnTime: rec ? rec.isOnTime : false,
+        earnedPoints: rec ? rec.earnedPoints : 0,
+        wasRevised: rec ? rec.wasRevised : false
+      });
     }
   });
+  occurrences.sort((a, b) =>
+    a.date === b.date ? a.targetTime.localeCompare(b.targetTime) : a.date.localeCompare(b.date)
+  );
+  const filteredTasks: Occurrence[] = occurrences;
+
+  // 같은 이름의 숙제가 여러 건이면 날짜 표시로 구분
+  const titleCounts: Record<string, number> = {};
+  occurrences.forEach(o => {
+    titleCounts[o.title] = (titleCounts[o.title] || 0) + 1;
+  });
+
+  // 오늘이 아닌 요일 탭: 예정된 반복 숙제 미리보기
+  const isTodayTab = selectedDay === new Date().getDay();
+  const previewTasks = tasks.filter(t =>
+    t.type === 'weekly'
+      ? t.days.includes(selectedDay)
+      : t.type === 'period'
+      ? (t.endDate || '') >= todayStr
+      : false
+  );
 
   // Pending Reviews Count
-  const pendingReviewCount = tasks.filter(t => t.status === 'submitted').length;
+  const pendingReviewCount = occurrences.filter(o => o.status === 'submitted').length;
+
+  // ---------- 월간 통계 ----------
+  const nowForStats = new Date();
+  const isCurrentStatsMonth =
+    statsMonth.year === nowForStats.getFullYear() && statsMonth.month === nowForStats.getMonth();
+  const monthLogs = pointLogs.filter(l => {
+    const d = new Date(Number(l.id));
+    return !isNaN(d.getTime()) && d.getFullYear() === statsMonth.year && d.getMonth() === statsMonth.month;
+  });
+  const monthTotal = monthLogs.reduce((sum, l) => sum + (l.points || 0), 0);
+  const monthStickerPoints = monthLogs
+    .filter(l => l.kind === 'sticker')
+    .reduce((sum, l) => sum + (l.points || 0), 0);
+  const monthHomeworkPoints = monthTotal - monthStickerPoints;
+  const monthApprovedCount = monthLogs.filter(l => l.kind !== 'sticker').length;
+  const monthDaysCount = new Date(statsMonth.year, statsMonth.month + 1, 0).getDate();
+  const dailyPoints: number[] = Array.from({ length: monthDaysCount }, () => 0);
+  monthLogs.forEach(l => {
+    const day = new Date(Number(l.id)).getDate();
+    dailyPoints[day - 1] += l.points || 0;
+  });
+  const maxDailyPoints = Math.max(1, ...dailyPoints);
+  const monthByTitle: { title: string; points: number }[] = [];
+  monthLogs.forEach(l => {
+    const found = monthByTitle.find(x => x.title === l.taskTitle);
+    if (found) found.points += l.points || 0;
+    else monthByTitle.push({ title: l.taskTitle, points: l.points || 0 });
+  });
+  monthByTitle.sort((a, b) => b.points - a.points);
+
+  const moveStatsMonth = (delta: number) => {
+    const d = new Date(statsMonth.year, statsMonth.month + delta, 1);
+    setStatsMonth({ year: d.getFullYear(), month: d.getMonth() });
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans pb-12">
@@ -608,6 +904,17 @@ export default function App() {
           </div>
         </div>
 
+        {/* 칭찬 스티커 (부모 전용) */}
+        {role === 'parent' && (
+          <button
+            onClick={() => { setStickerForm({ points: '1', reason: '' }); setIsStickerOpen(true); }}
+            className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-extrabold text-sm py-3 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
+          >
+            <span>⭐</span>
+            <span>칭찬 포인트 주기</span>
+          </button>
+        )}
+
         {/* Day Selector & Action Toolbar */}
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
@@ -649,10 +956,61 @@ export default function App() {
 
         {/* Homework Items List */}
         <div className="space-y-3">
-          {filteredTasks.length === 0 ? (
+          {!isTodayTab ? (
+            <>
+              <div className="bg-slate-100 text-slate-500 text-xs rounded-xl px-4 py-2.5">
+                📅 {DAYS.find(d => d.key === selectedDay)?.full} 예정 숙제 미리보기예요. 오늘 할 숙제는 오늘 요일 탭에서 확인하세요.
+              </div>
+              {previewTasks.length === 0 ? (
+                <div className="bg-white p-8 text-center rounded-2xl border border-dashed border-slate-300 text-slate-400">
+                  <p className="font-medium text-sm">이 요일에 예정된 반복 숙제가 없습니다.</p>
+                </div>
+              ) : (
+                previewTasks.map((task) => (
+                  <div
+                    key={task.id}
+                    className="bg-white p-4 rounded-2xl border border-dashed border-slate-300 flex items-center justify-between gap-3"
+                  >
+                    <div className="space-y-1 flex-1">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500">예정</span>
+                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                          task.type === 'weekly' ? 'bg-indigo-100 text-indigo-700' : 'bg-purple-100 text-purple-700'
+                        }`}>
+                          {task.type === 'weekly' ? '매주 반복' : '특정 기간'}
+                        </span>
+                      </div>
+                      <h3 className="font-bold text-slate-700 text-base">{task.title}</h3>
+                      <p className="text-xs text-slate-500">
+                        목표 완료: <strong className="text-slate-700">{task.targetTime}</strong>까지 · 정시 {task.onTimePoints}P / 지연 {task.latePoints}P
+                      </p>
+                    </div>
+                    {role === 'parent' && (
+                      <div className="flex items-center space-x-1">
+                        <button
+                          onClick={() => openEditTask(task)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition"
+                          title="수정"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget({ id: task.id, title: task.title, type: task.type, date: null })}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition"
+                          title="삭제"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </>
+          ) : filteredTasks.length === 0 ? (
             <div className="bg-white p-8 text-center rounded-2xl border border-dashed border-slate-300 text-slate-400 space-y-2">
               <AlertCircle className="w-8 h-8 mx-auto opacity-40" />
-              <p className="font-medium text-sm">선택한 요일에 설정된 숙제가 없습니다.</p>
+              <p className="font-medium text-sm">지금 해야 할 숙제가 없어요. 🎉</p>
               {role === 'parent' && (
                 <button
                   onClick={() => { resetTaskForm(); setIsAddTaskOpen(true); }}
@@ -666,7 +1024,7 @@ export default function App() {
             filteredTasks.map((task) => {
               return (
                 <div
-                  key={task.id}
+                  key={task.key}
                   className={`bg-white p-4 sm:p-5 rounded-2xl border transition-all ${
                     task.status === 'approved'
                       ? 'border-emerald-200 bg-emerald-50/20'
@@ -690,6 +1048,13 @@ export default function App() {
                           {task.type === 'weekly' ? '매주 반복' : task.type === 'period' ? '특정 기간' : '돌발/하루'}
                         </span>
 
+                        {/* 날짜 구분 (밀린 숙제이거나 같은 이름이 여러 건일 때) */}
+                        {(task.date !== todayStr || (titleCounts[task.title] || 0) > 1) && (
+                          <span className="bg-violet-100 text-violet-700 text-[10px] font-extrabold px-2 py-0.5 rounded-md">
+                            📅 {task.date === todayStr ? '오늘' : formatDateLabel(task.date)}
+                          </span>
+                        )}
+
                         {/* Custom Points Tag */}
                         <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center space-x-1">
                           <Award className="w-3 h-3 text-amber-500" />
@@ -706,13 +1071,13 @@ export default function App() {
                         {task.status === 'submitted' && (
                           <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2 py-0.5 rounded-md flex items-center space-x-1">
                             <Clock className="w-3 h-3 animate-spin text-amber-600" />
-                            <span>부모님 검수 대기 ({task.isOnTime ? '시간 내 완성' : '시간 초과 제출'})</span>
+                            <span>부모님 검수 대기 ({task.isOnTime ? '시간 내 완성' : '시간 초과 제출'}{task.wasRevised ? ' · 재제출' : ''})</span>
                           </span>
                         )}
                         {task.status === 'revision' && (
                           <span className="bg-rose-100 text-rose-800 text-[10px] font-extrabold px-2 py-0.5 rounded-md flex items-center space-x-1">
                             <AlertCircle className="w-3 h-3 text-rose-600" />
-                            <span>보류 (재수정 필요 - 최종 완료시 {task.latePoints || 1}P)</span>
+                            <span>보류 (재수정 필요)</span>
                           </span>
                         )}
                       </div>
@@ -746,7 +1111,7 @@ export default function App() {
                         <>
                           {task.status === 'pending' && (
                             <button
-                              onClick={() => handleChildSubmit(task.id)}
+                              onClick={() => handleChildSubmit(task)}
                               className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition flex items-center justify-center space-x-1.5"
                             >
                               <Check className="w-4 h-4" />
@@ -756,7 +1121,7 @@ export default function App() {
 
                           {task.status === 'revision' && (
                             <button
-                              onClick={() => handleChildSubmit(task.id)}
+                              onClick={() => handleChildSubmit(task)}
                               className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition flex items-center justify-center space-x-1.5"
                             >
                               <RotateCcw className="w-4 h-4" />
@@ -785,18 +1150,18 @@ export default function App() {
                           {task.status === 'submitted' && (
                             <div className="flex items-center space-x-2">
                               <button
-                                onClick={() => handleParentHold(task.id)}
+                                onClick={() => handleParentHold(task)}
                                 className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center space-x-1"
                               >
                                 <XCircle className="w-3.5 h-3.5" />
                                 <span>보류/재수정</span>
                               </button>
                               <button
-                                onClick={() => handleParentApprove(task.id)}
+                                onClick={() => requestApprove(task)}
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-sm transition flex items-center space-x-1"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>승인 ({task.isOnTime ? `${task.onTimePoints || 3}점` : `${task.latePoints || 1}점`})</span>
+                                <span>{task.isOnTime && !task.wasRevised ? `승인 (${task.onTimePoints || 3}점)` : '승인 · 점수 선택'}</span>
                               </button>
                             </div>
                           )}
@@ -829,7 +1194,7 @@ export default function App() {
                               <Edit3 className="w-4 h-4" />
                             </button>
                             <button
-                              onClick={() => handleDeleteTask(task.id)}
+                              onClick={() => setDeleteTarget({ id: task.id, title: task.title, type: task.type, date: task.date })}
                               className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition"
                               title="삭제"
                             >
@@ -846,6 +1211,92 @@ export default function App() {
           )}
         </div>
 
+        {/* 월간 포인트 통계 */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-slate-900 text-sm flex items-center space-x-2">
+              <span>📊</span>
+              <span>월간 포인트 통계</span>
+            </h3>
+            <div className="flex items-center space-x-1">
+              <button
+                onClick={() => moveStatsMonth(-1)}
+                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition"
+                title="이전 달"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-xs font-extrabold text-slate-800 min-w-[84px] text-center">
+                {statsMonth.year}년 {statsMonth.month + 1}월
+              </span>
+              <button
+                onClick={() => moveStatsMonth(1)}
+                disabled={isCurrentStatsMonth}
+                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition disabled:opacity-30 disabled:hover:bg-transparent"
+                title="다음 달"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-[10px] font-bold text-slate-400">이달 획득</p>
+              <p className="text-lg font-black text-slate-900">{monthTotal}<span className="text-xs font-semibold text-slate-500"> P</span></p>
+            </div>
+            <div className="bg-emerald-50 rounded-xl p-3">
+              <p className="text-[10px] font-bold text-emerald-600">환산 금액</p>
+              <p className="text-lg font-black text-emerald-700">{(monthTotal * pointRate).toLocaleString()}<span className="text-xs font-semibold text-emerald-600"> 원</span></p>
+            </div>
+            <div className="bg-indigo-50 rounded-xl p-3">
+              <p className="text-[10px] font-bold text-indigo-600">숙제 포인트</p>
+              <p className="text-lg font-black text-indigo-700">{monthHomeworkPoints}<span className="text-xs font-semibold text-indigo-600"> P</span></p>
+              <p className="text-[10px] text-indigo-500">{monthApprovedCount}건 승인</p>
+            </div>
+            <div className="bg-amber-50 rounded-xl p-3">
+              <p className="text-[10px] font-bold text-amber-600">칭찬 포인트</p>
+              <p className="text-lg font-black text-amber-700">{monthStickerPoints}<span className="text-xs font-semibold text-amber-600"> P</span></p>
+            </div>
+          </div>
+
+          {monthLogs.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-4">이 달에는 아직 지급된 포인트가 없어요.</p>
+          ) : (
+            <>
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 mb-2">일별 획득 포인트</p>
+                <div className="flex items-end gap-px h-24">
+                  {dailyPoints.map((v, i) => (
+                    <div key={i} className="flex-1 flex flex-col justify-end h-full" title={`${i + 1}일: ${v}P`}>
+                      <div
+                        className={v > 0 ? 'bg-indigo-500 rounded-t-sm' : 'bg-slate-200'}
+                        style={{ height: v > 0 ? `${Math.max(8, (v / maxDailyPoints) * 100)}%` : '2px' }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                  <span>1일</span>
+                  <span>{monthDaysCount}일</span>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 mb-1">포인트 많이 받은 항목</p>
+                <div className="divide-y divide-slate-100 text-xs">
+                  {monthByTitle.slice(0, 5).map(item => (
+                    <div key={item.title} className="py-2 flex justify-between items-center">
+                      <span className="font-medium text-slate-700 truncate pr-2">{item.title}</span>
+                      <span className="font-extrabold text-indigo-600 whitespace-nowrap">{item.points} P</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
         {/* Point Log History Table */}
         {pointLogs.length > 0 && (
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
@@ -858,7 +1309,7 @@ export default function App() {
               {pointLogs.slice(0, 5).map(log => (
                 <div key={log.id} className="py-2.5 flex justify-between items-center">
                   <div>
-                    <p className="font-bold text-slate-800">{log.taskTitle}</p>
+                    <p className="font-bold text-slate-800">{log.kind === 'sticker' ? '⭐ ' : ''}{log.taskTitle}</p>
                     <p className="text-slate-400 text-[10px]">{log.date} {log.time} · {log.type}</p>
                   </div>
                   <span className="font-extrabold text-indigo-600 text-sm">+{log.points} P</span>
@@ -868,6 +1319,170 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* MODAL D: 삭제 범위 선택 */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base">숙제 삭제</h3>
+                <p className="text-xs text-slate-500 mt-1">{deleteTarget.title}</p>
+              </div>
+              <button onClick={() => setDeleteTarget(null)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+            </div>
+
+            <div className="space-y-2">
+              {deleteTarget.type !== 'onetime' && deleteTarget.date && (
+                <button
+                  onClick={() => confirmDelete('one')}
+                  className="w-full text-left bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold text-sm px-4 py-3 rounded-xl transition"
+                >
+                  <span className="block">이 날짜({formatDateLabel(deleteTarget.date)})만 삭제</span>
+                  <span className="block text-[11px] font-medium text-amber-700 mt-0.5">반복 숙제는 유지되고, 다음 날짜부터 계속 나와요.</span>
+                </button>
+              )}
+              <button
+                onClick={() => confirmDelete('all')}
+                className="w-full text-left bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-sm px-4 py-3 rounded-xl transition"
+              >
+                <span className="block">{deleteTarget.type === 'onetime' ? '삭제' : '반복 숙제 전체 삭제'}</span>
+                {deleteTarget.type !== 'onetime' && (
+                  <span className="block text-[11px] font-medium text-rose-600 mt-0.5">지난 기록과 앞으로의 숙제가 모두 사라져요.</span>
+                )}
+              </button>
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs py-2.5 rounded-xl transition"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL A: 승인 포인트 선택 (지연 제출 / 재제출) */}
+      {approvalTarget && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base">지급할 포인트 선택</h3>
+                <p className="text-xs text-slate-500 mt-1">{approvalTarget.title}{approvalTarget.date !== todayStr ? ` (${formatDateLabel(approvalTarget.date)})` : ''}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {approvalTarget.isOnTime ? '시간 내 제출' : '시간 초과 제출'}
+                  {approvalTarget.wasRevised ? ' · 재수정 후 재제출' : ''}
+                </p>
+              </div>
+              <button onClick={() => setApprovalTarget(null)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                onClick={() => approveWithPoints(approvalTarget, approvalTarget.onTimePoints || 3)}
+                className="w-full flex justify-between items-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-sm px-4 py-3 rounded-xl transition"
+              >
+                <span>전체 포인트 (깎지 않고)</span>
+                <span>{approvalTarget.onTimePoints || 3}점</span>
+              </button>
+              <button
+                onClick={() => approveWithPoints(approvalTarget, approvalTarget.latePoints || 1)}
+                className="w-full flex justify-between items-center bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold text-sm px-4 py-3 rounded-xl transition"
+              >
+                <span>부분 포인트 (지연·재수정)</span>
+                <span>{approvalTarget.latePoints || 1}점</span>
+              </button>
+              <button
+                onClick={() => approveWithPoints(approvalTarget, 0)}
+                className="w-full flex justify-between items-center bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm px-4 py-3 rounded-xl transition"
+              >
+                <span>포인트 없이 승인</span>
+                <span>0점</span>
+              </button>
+
+              <div className="flex items-center space-x-2 pt-1">
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="직접 입력"
+                  value={customPoints}
+                  onChange={(e) => setCustomPoints(e.target.value)}
+                  className="flex-1 text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-indigo-600"
+                />
+                <button
+                  onClick={() => {
+                    const p = Math.floor(Number(customPoints));
+                    if (customPoints !== '' && p >= 0) approveWithPoints(approvalTarget, p);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-3 rounded-xl transition whitespace-nowrap"
+                >
+                  이 점수로 승인
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL B: 칭찬 포인트 주기 */}
+      {isStickerOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-900 text-lg">⭐ 칭찬 포인트 주기</h3>
+              <button onClick={() => setIsStickerOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+            </div>
+
+            <form onSubmit={handleGiveSticker} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">칭찬 이유 (선택)</label>
+                <input
+                  type="text"
+                  placeholder="예: 동생이랑 사이좋게 놀았어요"
+                  value={stickerForm.reason}
+                  onChange={(e) => setStickerForm({ ...stickerForm, reason: e.target.value })}
+                  className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">줄 포인트</label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={stickerForm.points}
+                    onChange={(e) => setStickerForm({ ...stickerForm, points: e.target.value })}
+                    className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-amber-700"
+                  />
+                  <span className="text-xs font-bold text-slate-500">점</span>
+                </div>
+                <div className="flex space-x-2 mt-2">
+                  {[1, 3, 5, 10].map(n => (
+                    <button
+                      type="button"
+                      key={n}
+                      onClick={() => setStickerForm({ ...stickerForm, points: String(n) })}
+                      className="flex-1 bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold text-xs py-2 rounded-lg transition"
+                    >
+                      +{n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm py-3 rounded-xl shadow-md transition"
+              >
+                포인트 선물하기
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL 1: Create / Edit Task Modal */}
       {isAddTaskOpen && (
