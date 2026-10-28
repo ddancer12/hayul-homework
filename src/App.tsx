@@ -18,6 +18,8 @@ import {
   Settings,
   ChevronRight,
   ChevronLeft,
+  ChevronUp,
+  ChevronDown,
   Edit3,
   Lock,
   Copy
@@ -56,6 +58,7 @@ interface Task {
   latePoints: number;
   note: string;
   createdDate: string; // 'YYYY-MM-DD' - 이 날짜부터 숙제가 나타남
+  order?: number; // 목록 순서 (작을수록 위)
   // 예전 버전에서 쓰던 값 (한 번 기록으로 옮긴 뒤에는 사용하지 않음)
   status?: TaskStatus;
   submittedAt?: string | null;
@@ -187,8 +190,8 @@ const stripLegacy = (t: Task, today: string): Task => ({
   startDate: t.startDate || '',
   endDate: t.endDate || '',
   targetTime: t.targetTime || '18:00',
-  onTimePoints: t.onTimePoints || 3,
-  latePoints: t.latePoints || 1,
+  onTimePoints: t.onTimePoints ?? 3,
+  latePoints: t.latePoints ?? 1,
   note: t.note || '',
   createdDate: today
 });
@@ -244,7 +247,7 @@ export default function App() {
   const [selectedDay, setSelectedDay] = useState<number>(new Date().getDay());
 
   // Role State: 'child' | 'parent'
-  // 부모/아이 모드는 이 기기에만 기억 (새로고침해도 유지)
+  // 엄마아빠/하율 모드는 이 기기에만 기억 (새로고침해도 유지)
   const [role, setRole] = useState<Role>(() => {
     try {
       return localStorage.getItem('kids_homework_role') === 'parent' ? 'parent' : 'child';
@@ -447,7 +450,7 @@ export default function App() {
       setRole('parent');
       setIsPinModalOpen(false);
       setInputPin('');
-      showToast('부모 모드로 전환되었습니다.');
+      showToast('엄마아빠 모드로 전환되었습니다.');
     } else {
       window.alert('비밀번호가 일치하지 않습니다. (기본 비밀번호: 0000)');
     }
@@ -496,8 +499,8 @@ export default function App() {
   const approveWithPoints = (occ: Occurrence, points: number) => {
     let typeLabel = '직접 지정';
     if (points === 0) typeLabel = '포인트 없음';
-    else if (points === (occ.onTimePoints || 3)) typeLabel = occ.wasRevised ? '재수정 후 전체 지급' : '정시 완수 (전체)';
-    else if (points === (occ.latePoints || 1)) typeLabel = occ.wasRevised ? '재수정 후 부분 지급' : '지연 완수 (부분)';
+    else if (points === (occ.onTimePoints ?? 3)) typeLabel = occ.wasRevised ? '재수정 후 전체 지급' : '정시 완수 (전체)';
+    else if (points === (occ.latePoints ?? 1)) typeLabel = occ.wasRevised ? '재수정 후 부분 지급' : '지연 완수 (부분)';
 
     const newLog: PointLog = {
       id: Date.now().toString(),
@@ -526,7 +529,7 @@ export default function App() {
   // 승인 버튼: 시간 내 + 첫 제출이면 바로 전체 포인트, 아니면 포인트 선택창
   const requestApprove = (occ: Occurrence) => {
     if (occ.isOnTime && !occ.wasRevised) {
-      approveWithPoints(occ, occ.onTimePoints || 3);
+      approveWithPoints(occ, occ.onTimePoints ?? 3);
     } else {
       setCustomPoints('');
       setApprovalTarget(occ);
@@ -599,7 +602,8 @@ export default function App() {
         onTimePoints: Number(taskForm.onTimePoints),
         latePoints: Number(taskForm.latePoints),
         note: taskForm.note,
-        createdDate: todayStr
+        createdDate: todayStr,
+        order: Date.now() // 새 숙제는 맨 아래부터
       };
       updatedTasks = [...tasks, newTask];
       showToast(taskForm.type === 'weekly' ? '새 숙제가 등록되었습니다! 해당 요일부터 나타나요.' : '새 숙제가 등록되었습니다!');
@@ -635,8 +639,8 @@ export default function App() {
       startDate: task.startDate || toDateStr(new Date()),
       endDate: task.endDate || toDateStr(new Date()),
       targetTime: task.targetTime || '18:00',
-      onTimePoints: task.onTimePoints || 3,
-      latePoints: task.latePoints || 1,
+      onTimePoints: task.onTimePoints ?? 3,
+      latePoints: task.latePoints ?? 1,
       note: task.note || ''
     });
     setIsAddTaskOpen(true);
@@ -708,9 +712,14 @@ export default function App() {
       });
     }
   });
-  occurrences.sort((a, b) =>
-    a.date === b.date ? a.targetTime.localeCompare(b.targetTime) : a.date.localeCompare(b.date)
-  );
+  // 같은 날짜 안에서는 직접 정한 순서(▲▼)대로, 순서가 같으면 목표 시간순
+  const orderMap = new Map<string, number>();
+  tasks.forEach((t, i) => orderMap.set(t.id, t.order !== undefined ? t.order : i));
+  occurrences.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const diff = (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0);
+    return diff !== 0 ? diff : a.targetTime.localeCompare(b.targetTime);
+  });
   const filteredTasks: Occurrence[] = occurrences;
 
   // 같은 이름의 숙제가 여러 건이면 날짜 표시로 구분
@@ -718,6 +727,26 @@ export default function App() {
   occurrences.forEach(o => {
     titleCounts[o.title] = (titleCounts[o.title] || 0) + 1;
   });
+
+  // Parent: 숙제 순서 위/아래로 옮기기 (같은 날짜 안에서만)
+  const moveTask = (occ: Occurrence, dir: -1 | 1) => {
+    const idx = occurrences.findIndex(o => o.key === occ.key);
+    const neighbor = occurrences[idx + dir];
+    if (idx < 0 || !neighbor || neighbor.date !== occ.date) return;
+
+    // 현재 순서대로 0, 1, 2... 번호를 다시 매긴 뒤 두 숙제의 번호를 맞바꿈
+    const sorted = [...tasks].sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
+    const numbered = new Map<string, number>();
+    sorted.forEach((t, i) => numbered.set(t.id, i));
+    const a = numbered.get(occ.id) ?? 0;
+    const b = numbered.get(neighbor.id) ?? 0;
+    numbered.set(occ.id, b);
+    numbered.set(neighbor.id, a);
+
+    const updatedTasks = tasks.map(t => ({ ...t, order: numbered.get(t.id) ?? 0 }));
+    setTasks(updatedTasks);
+    syncToFirebase({ tasks: updatedTasks });
+  };
 
   // 오늘이 아닌 요일 탭: 예정된 반복 숙제 미리보기
   const isTodayTab = selectedDay === new Date().getDay();
@@ -784,7 +813,7 @@ export default function App() {
               <Award className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-extrabold text-base text-slate-900 leading-tight">쑥쑥 숙제 & 용돈 정산</h1>
+              <h1 className="font-extrabold text-base text-slate-900 leading-tight">하율 숙제 & 용돈 정산</h1>
               <p className="text-[11px] text-slate-500">시간 내 완성시 차등 포인트 지급</p>
             </div>
           </div>
@@ -800,7 +829,7 @@ export default function App() {
               }`}
             >
               <UserCheck className="w-3.5 h-3.5" />
-              <span>아이 모드</span>
+              <span>하율</span>
             </button>
             <button
               onClick={() => handleRoleSwitch('parent')}
@@ -811,7 +840,7 @@ export default function App() {
               }`}
             >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>부모 모드</span>
+              <span>엄마아빠</span>
               {pendingReviewCount > 0 && (
                 <span className="bg-amber-400 text-slate-900 text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
                   {pendingReviewCount}
@@ -836,7 +865,7 @@ export default function App() {
             </div>
             <div>
               <p className="font-extrabold text-sm sm:text-base">
-                {role === 'child' ? '시간 내 완성하면 약속된 최고 포인트 지급!' : '부모 모드 - 검수 및 용돈 정산 관리'}
+                {role === 'child' ? '시간 내 완성하면 약속된 최고 포인트 지급!' : '엄마아빠 모드 - 검수 및 용돈 정산 관리'}
               </p>
               <p className="text-xs opacity-90 mt-0.5">
                 {role === 'child'
@@ -845,18 +874,10 @@ export default function App() {
               </p>
             </div>
           </div>
-
-          <button
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 transition text-white"
-            title="설정"
-          >
-            <Settings className="w-5 h-5" />
-          </button>
         </div>
 
-        {/* Dashboard Cards (Points & Toss Allowance) */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Dashboard Cards (Points) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Accumulated Points Card */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
             <div className="flex justify-between items-start">
@@ -885,35 +906,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Toss Quick Transfer Card */}
-          <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-5 rounded-2xl shadow-md text-white flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <span className="text-xs font-bold text-blue-100 uppercase tracking-wider">토스 용돈 정산</span>
-              <Send className="w-5 h-5 text-blue-200" />
-            </div>
-            <div className="mt-2">
-              <p className="text-xs text-blue-100">토스 간편 송금으로 즉시 지급하기</p>
-              <button
-                onClick={() => setIsTossModalOpen(true)}
-                className="mt-3 w-full bg-white text-blue-700 font-extrabold py-2 px-4 rounded-xl shadow hover:bg-blue-50 transition flex items-center justify-center space-x-1.5 text-xs"
-              >
-                <span>토스 송금 바로가기</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
         </div>
-
-        {/* 칭찬 스티커 (부모 전용) */}
-        {role === 'parent' && (
-          <button
-            onClick={() => { setStickerForm({ points: '1', reason: '' }); setIsStickerOpen(true); }}
-            className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-extrabold text-sm py-3 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
-          >
-            <span>⭐</span>
-            <span>칭찬 포인트 주기</span>
-          </button>
-        )}
 
         {/* Day Selector & Action Toolbar */}
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
@@ -1021,7 +1014,9 @@ export default function App() {
               )}
             </div>
           ) : (
-            filteredTasks.map((task) => {
+            filteredTasks.map((task, taskIndex) => {
+              const canMoveUp = taskIndex > 0 && filteredTasks[taskIndex - 1].date === task.date;
+              const canMoveDown = taskIndex < filteredTasks.length - 1 && filteredTasks[taskIndex + 1].date === task.date;
               return (
                 <div
                   key={task.key}
@@ -1058,7 +1053,7 @@ export default function App() {
                         {/* Custom Points Tag */}
                         <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center space-x-1">
                           <Award className="w-3 h-3 text-amber-500" />
-                          <span>정시: {task.onTimePoints || 3}P / 지연·재수정: {task.latePoints || 1}P</span>
+                          <span>정시: {task.onTimePoints ?? 3}P / 지연·재수정: {task.latePoints ?? 1}P</span>
                         </span>
 
                         {/* Status Badges */}
@@ -1161,7 +1156,7 @@ export default function App() {
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-sm transition flex items-center space-x-1"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>{task.isOnTime && !task.wasRevised ? `승인 (${task.onTimePoints || 3}점)` : '승인 · 점수 선택'}</span>
+                                <span>{task.isOnTime && !task.wasRevised ? `승인 (${task.onTimePoints ?? 3}점)` : '승인 · 점수 선택'}</span>
                               </button>
                             </div>
                           )}
@@ -1187,6 +1182,22 @@ export default function App() {
                           {/* Edit / Delete Options */}
                           <div className="flex items-center space-x-1 border-l border-slate-200 ml-2 pl-2">
                             <button
+                              onClick={() => moveTask(task, -1)}
+                              disabled={!canMoveUp}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition disabled:opacity-25 disabled:hover:text-slate-400"
+                              title="위로"
+                            >
+                              <ChevronUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => moveTask(task, 1)}
+                              disabled={!canMoveDown}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition disabled:opacity-25 disabled:hover:text-slate-400"
+                              title="아래로"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                            <button
                               onClick={() => openEditTask(task)}
                               className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition"
                               title="수정"
@@ -1209,6 +1220,35 @@ export default function App() {
               );
             })
           )}
+        </div>
+
+        {/* 칭찬 스티커 (부모 전용) */}
+        {role === 'parent' && (
+          <button
+            onClick={() => { setStickerForm({ points: '1', reason: '' }); setIsStickerOpen(true); }}
+            className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-extrabold text-sm py-3 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
+          >
+            <span>⭐</span>
+            <span>칭찬 포인트 주기</span>
+          </button>
+        )}
+
+        {/* Toss Quick Transfer Card */}
+        <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-5 rounded-2xl shadow-md text-white flex flex-col justify-between">
+          <div className="flex justify-between items-start">
+            <span className="text-xs font-bold text-blue-100 uppercase tracking-wider">토스 용돈 정산</span>
+            <Send className="w-5 h-5 text-blue-200" />
+          </div>
+          <div className="mt-2">
+            <p className="text-xs text-blue-100">토스 간편 송금으로 즉시 지급하기</p>
+            <button
+              onClick={() => setIsTossModalOpen(true)}
+              className="mt-3 w-full bg-white text-blue-700 font-extrabold py-2 px-4 rounded-xl shadow hover:bg-blue-50 transition flex items-center justify-center space-x-1.5 text-xs"
+            >
+              <span>토스 송금 바로가기</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* 월간 포인트 통계 */}
@@ -1318,6 +1358,17 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* 환경설정 (엄마아빠 모드 전용) */}
+        {role === 'parent' && (
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="w-full bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 font-bold text-sm py-3 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2"
+          >
+            <Settings className="w-4 h-4" />
+            <span>환경설정</span>
+          </button>
+        )}
       </main>
 
       {/* MODAL D: 삭제 범위 선택 */}
@@ -1380,18 +1431,18 @@ export default function App() {
 
             <div className="space-y-2">
               <button
-                onClick={() => approveWithPoints(approvalTarget, approvalTarget.onTimePoints || 3)}
+                onClick={() => approveWithPoints(approvalTarget, approvalTarget.onTimePoints ?? 3)}
                 className="w-full flex justify-between items-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-sm px-4 py-3 rounded-xl transition"
               >
                 <span>전체 포인트 (깎지 않고)</span>
-                <span>{approvalTarget.onTimePoints || 3}점</span>
+                <span>{approvalTarget.onTimePoints ?? 3}점</span>
               </button>
               <button
-                onClick={() => approveWithPoints(approvalTarget, approvalTarget.latePoints || 1)}
+                onClick={() => approveWithPoints(approvalTarget, approvalTarget.latePoints ?? 1)}
                 className="w-full flex justify-between items-center bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold text-sm px-4 py-3 rounded-xl transition"
               >
                 <span>부분 포인트 (지연·재수정)</span>
-                <span>{approvalTarget.latePoints || 1}점</span>
+                <span>{approvalTarget.latePoints ?? 1}점</span>
               </button>
               <button
                 onClick={() => approveWithPoints(approvalTarget, 0)}
@@ -1781,7 +1832,7 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">부모 모드 전환 비밀번호 (PIN)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">엄마아빠 모드 전환 비밀번호 (PIN)</label>
                 <input
                   type="password"
                   maxLength={4}
@@ -1813,7 +1864,7 @@ export default function App() {
             </div>
 
             <div>
-              <h3 className="font-extrabold text-slate-900 text-base">부모 모드 비밀번호</h3>
+              <h3 className="font-extrabold text-slate-900 text-base">엄마아빠 모드 비밀번호</h3>
               <p className="text-xs text-slate-400 mt-1">4자리 PIN 번호를 입력하세요 (기본: 0000)</p>
             </div>
 
