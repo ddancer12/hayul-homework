@@ -728,35 +728,48 @@ export default function App() {
     titleCounts[o.title] = (titleCounts[o.title] || 0) + 1;
   });
 
-  // Parent: 숙제 순서 위/아래로 옮기기 (같은 날짜 안에서만)
-  const moveTask = (occ: Occurrence, dir: -1 | 1) => {
-    const idx = occurrences.findIndex(o => o.key === occ.key);
-    const neighbor = occurrences[idx + dir];
-    if (idx < 0 || !neighbor || neighbor.date !== occ.date) return;
-
-    // 현재 순서대로 0, 1, 2... 번호를 다시 매긴 뒤 두 숙제의 번호를 맞바꿈
+  // 두 숙제의 순서를 맞바꿈 (현재 순서대로 0, 1, 2... 번호를 다시 매긴 뒤 교환)
+  const swapTaskOrder = (idA: string, idB: string) => {
     const sorted = [...tasks].sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
     const numbered = new Map<string, number>();
     sorted.forEach((t, i) => numbered.set(t.id, i));
-    const a = numbered.get(occ.id) ?? 0;
-    const b = numbered.get(neighbor.id) ?? 0;
-    numbered.set(occ.id, b);
-    numbered.set(neighbor.id, a);
+    const a = numbered.get(idA) ?? 0;
+    const b = numbered.get(idB) ?? 0;
+    numbered.set(idA, b);
+    numbered.set(idB, a);
 
     const updatedTasks = tasks.map(t => ({ ...t, order: numbered.get(t.id) ?? 0 }));
     setTasks(updatedTasks);
     syncToFirebase({ tasks: updatedTasks });
   };
 
+  // Parent: 오늘 목록에서 위/아래로 옮기기 (같은 날짜 안에서만)
+  const moveTask = (occ: Occurrence, dir: -1 | 1) => {
+    const idx = occurrences.findIndex(o => o.key === occ.key);
+    const neighbor = occurrences[idx + dir];
+    if (idx < 0 || !neighbor || neighbor.date !== occ.date) return;
+    swapTaskOrder(occ.id, neighbor.id);
+  };
+
   // 오늘이 아닌 요일 탭: 예정된 반복 숙제 미리보기
   const isTodayTab = selectedDay === new Date().getDay();
-  const previewTasks = tasks.filter(t =>
-    t.type === 'weekly'
-      ? t.days.includes(selectedDay)
-      : t.type === 'period'
-      ? (t.endDate || '') >= todayStr
-      : false
-  );
+  const previewTasks = tasks
+    .filter(t =>
+      t.type === 'weekly'
+        ? t.days.includes(selectedDay)
+        : t.type === 'period'
+        ? (t.endDate || '') >= todayStr
+        : false
+    )
+    .sort((a, b) => (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0));
+
+  // Parent: 다른 요일 탭(예정 목록)에서 위/아래로 옮기기
+  const movePreviewTask = (task: Task, dir: -1 | 1) => {
+    const idx = previewTasks.findIndex(t => t.id === task.id);
+    const neighbor = previewTasks[idx + dir];
+    if (idx < 0 || !neighbor) return;
+    swapTaskOrder(task.id, neighbor.id);
+  };
 
   // Pending Reviews Count
   const pendingReviewCount = occurrences.filter(o => o.status === 'submitted').length;
@@ -959,7 +972,7 @@ export default function App() {
                   <p className="font-medium text-sm">이 요일에 예정된 반복 숙제가 없습니다.</p>
                 </div>
               ) : (
-                previewTasks.map((task) => (
+                previewTasks.map((task, previewIndex) => (
                   <div
                     key={task.id}
                     className="bg-white p-4 rounded-2xl border border-dashed border-slate-300 flex items-center justify-between gap-3"
@@ -980,6 +993,22 @@ export default function App() {
                     </div>
                     {role === 'parent' && (
                       <div className="flex items-center space-x-1">
+                        <button
+                          onClick={() => movePreviewTask(task, -1)}
+                          disabled={previewIndex === 0}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition disabled:opacity-25 disabled:hover:text-slate-400"
+                          title="위로"
+                        >
+                          <ChevronUp className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => movePreviewTask(task, 1)}
+                          disabled={previewIndex === previewTasks.length - 1}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition disabled:opacity-25 disabled:hover:text-slate-400"
+                          title="아래로"
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={() => openEditTask(task)}
                           className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg transition"
