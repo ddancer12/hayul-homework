@@ -59,6 +59,7 @@ interface Task {
   note: string;
   createdDate: string; // 'YYYY-MM-DD' - 이 날짜부터 숙제가 나타남
   order?: number; // 목록 순서 (작을수록 위)
+  carryOver?: boolean; // false면 그날만 (지나면 사라짐), 없거나 true면 다음 날에도 남음
   // 예전 버전에서 쓰던 값 (한 번 기록으로 옮긴 뒤에는 사용하지 않음)
   status?: TaskStatus;
   submittedAt?: string | null;
@@ -128,6 +129,7 @@ interface TaskForm {
   onTimePoints: number;
   latePoints: number;
   note: string;
+  carryOver: boolean;
 }
 
 // Days of week helper
@@ -308,7 +310,8 @@ export default function App() {
     targetTime: '18:00',
     onTimePoints: 3,
     latePoints: 1,
-    note: ''
+    note: '',
+    carryOver: true
   });
 
   useEffect(() => {
@@ -587,7 +590,8 @@ export default function App() {
         targetTime: taskForm.targetTime,
         onTimePoints: Number(taskForm.onTimePoints),
         latePoints: Number(taskForm.latePoints),
-        note: taskForm.note
+        note: taskForm.note,
+        carryOver: taskForm.carryOver
       } : t);
       showToast('숙제 정보가 수정되었습니다.');
     } else {
@@ -603,7 +607,8 @@ export default function App() {
         latePoints: Number(taskForm.latePoints),
         note: taskForm.note,
         createdDate: todayStr,
-        order: Date.now() // 새 숙제는 맨 아래부터
+        order: Date.now(), // 새 숙제는 맨 아래부터
+        carryOver: taskForm.carryOver
       };
       updatedTasks = [...tasks, newTask];
       showToast(taskForm.type === 'weekly' ? '새 숙제가 등록되었습니다! 해당 요일부터 나타나요.' : '새 숙제가 등록되었습니다!');
@@ -626,7 +631,8 @@ export default function App() {
       targetTime: '18:00',
       onTimePoints: 3,
       latePoints: 1,
-      note: ''
+      note: '',
+      carryOver: true
     });
   };
 
@@ -641,7 +647,8 @@ export default function App() {
       targetTime: task.targetTime || '18:00',
       onTimePoints: task.onTimePoints ?? 3,
       latePoints: task.latePoints ?? 1,
-      note: task.note || ''
+      note: task.note || '',
+      carryOver: task.carryOver !== false
     });
     setIsAddTaskOpen(true);
   };
@@ -699,6 +706,8 @@ export default function App() {
       const rec = recordMap.get(key);
       const status: TaskStatus | 'dismissed' = rec ? rec.status : 'pending';
       if (status === 'dismissed') continue;
+      // '그날만' 숙제: 날짜가 지나면 미제출/보류 상태는 사라짐 (제출해서 승인 대기 중인 것은 남김)
+      if (task.carryOver === false && ds < todayStr && (status === 'pending' || status === 'revision')) continue;
       if (status === 'approved' && !(rec && rec.approvedDate === todayStr)) continue;
       occurrences.push({
         ...task,
@@ -1076,6 +1085,12 @@ export default function App() {
                         {(task.date !== todayStr || (titleCounts[task.title] || 0) > 1) && (
                           <span className="bg-violet-100 text-violet-700 text-[10px] font-extrabold px-2 py-0.5 rounded-md">
                             📅 {task.date === todayStr ? '오늘' : formatDateLabel(task.date)}
+                          </span>
+                        )}
+
+                        {task.carryOver === false && (
+                          <span className="bg-slate-100 text-slate-600 text-[10px] font-extrabold px-2 py-0.5 rounded-md">
+                            ⏱ 당일만
                           </span>
                         )}
 
@@ -1707,6 +1722,35 @@ export default function App() {
                   onChange={(e) => setTaskForm({ ...taskForm, targetTime: e.target.value })}
                   className="w-full text-sm p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">날짜가 지나면</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTaskForm({ ...taskForm, carryOver: true })}
+                    className={`py-2.5 text-xs font-bold rounded-xl transition ${
+                      taskForm.carryOver ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    다음 날에도 남기기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskForm({ ...taskForm, carryOver: false })}
+                    className={`py-2.5 text-xs font-bold rounded-xl transition ${
+                      !taskForm.carryOver ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    그날만 (지나면 사라짐)
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {taskForm.carryOver
+                    ? '못 한 숙제는 엄마아빠가 삭제할 때까지 계속 남아요.'
+                    : '못 한 숙제는 날짜가 지나면 사라져요. 제출해서 승인 대기 중인 숙제는 승인할 때까지 남아요.'}
+                </p>
               </div>
 
               <div>
