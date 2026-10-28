@@ -1262,23 +1262,25 @@ export default function App() {
           </button>
         )}
 
-        {/* Toss Quick Transfer Card */}
-        <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-5 rounded-2xl shadow-md text-white flex flex-col justify-between">
-          <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-blue-100 uppercase tracking-wider">토스 용돈 정산</span>
-            <Send className="w-5 h-5 text-blue-200" />
+        {/* Toss Quick Transfer Card (엄마아빠 모드 전용) */}
+        {role === 'parent' && (
+          <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-5 rounded-2xl shadow-md text-white flex flex-col justify-between">
+            <div className="flex justify-between items-start">
+              <span className="text-xs font-bold text-blue-100 uppercase tracking-wider">토스 용돈 정산</span>
+              <Send className="w-5 h-5 text-blue-200" />
+            </div>
+            <div className="mt-2">
+              <p className="text-xs text-blue-100">토스 간편 송금으로 즉시 지급하기</p>
+              <button
+                onClick={() => setIsTossModalOpen(true)}
+                className="mt-3 w-full bg-white text-blue-700 font-extrabold py-2 px-4 rounded-xl shadow hover:bg-blue-50 transition flex items-center justify-center space-x-1.5 text-xs"
+              >
+                <span>토스 송금 바로가기</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
-          <div className="mt-2">
-            <p className="text-xs text-blue-100">토스 간편 송금으로 즉시 지급하기</p>
-            <button
-              onClick={() => setIsTossModalOpen(true)}
-              className="mt-3 w-full bg-white text-blue-700 font-extrabold py-2 px-4 rounded-xl shadow hover:bg-blue-50 transition flex items-center justify-center space-x-1.5 text-xs"
-            >
-              <span>토스 송금 바로가기</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* 월간 포인트 통계 */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
