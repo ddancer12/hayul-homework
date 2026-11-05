@@ -279,6 +279,8 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>(createDefaultTasks);
   const [records, setRecords] = useState<HwRecord[]>([]);
   const [, setTick] = useState(0); // 날짜 변경 감지용
+  const [isLoaded, setIsLoaded] = useState(false); // 서버 데이터를 한 번이라도 불러왔는지
+  const [loadError, setLoadError] = useState(false);
 
   // Point History Log
   const [pointLogs, setPointLogs] = useState<PointLog[]>([]);
@@ -332,6 +334,8 @@ export default function App() {
     const unsubscribe = onSnapshot(
       docRef,
       (docSnap) => {
+        setIsLoaded(true);
+        setLoadError(false);
         if (docSnap.exists()) {
           const data = docSnap.data();
           const today = toDateStr(new Date());
@@ -396,6 +400,7 @@ export default function App() {
       },
       (error) => {
         console.error('Firebase snapshot error: ', error);
+        setLoadError(true);
       }
     );
 
@@ -404,6 +409,7 @@ export default function App() {
 
   // 데이터 변경 시 Firebase에 저장 (바뀐 값만 overrides로 넘기면 나머지는 현재 값 사용)
   const syncToFirebase = (overrides: Partial<SyncData> = {}) => {
+    if (!isLoaded) return; // 서버 데이터를 불러오기 전에는 절대 저장하지 않음
     const data: SyncData = {
       tasks,
       records,
@@ -681,6 +687,75 @@ export default function App() {
     syncToFirebase({ paidPoints: totalEarnedPoints });
   };
 
+  // 백업 파일(JSON) 내려받기
+  const handleBackupDownload = () => {
+    const data = {
+      app: 'hayul-homework',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      tasks,
+      records,
+      pointLogs,
+      paidPoints,
+      pointRate,
+      childTossId,
+      childBankInfo,
+      parentPin
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `hayul-homework-backup-${toDateStr(new Date())}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('백업 파일을 내려받았어요.');
+  };
+
+  // 백업 파일로 복원
+  const handleRestoreFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (!Array.isArray(data.tasks) || !Array.isArray(data.pointLogs)) {
+          window.alert('이 앱의 백업 파일이 아니에요.');
+          return;
+        }
+        if (!window.confirm('백업 파일로 복원할까요? 지금 저장된 데이터가 모두 백업 내용으로 바뀝니다.')) return;
+        const restored: SyncData = {
+          tasks: data.tasks,
+          records: Array.isArray(data.records) ? data.records : [],
+          pointLogs: data.pointLogs,
+          paidPoints: Number(data.paidPoints) || 0,
+          pointRate: Number(data.pointRate) || 100,
+          childTossId: data.childTossId || '',
+          childBankInfo: data.childBankInfo || childBankInfo,
+          parentPin: data.parentPin || parentPin
+        };
+        setTasks(restored.tasks);
+        setRecords(restored.records);
+        setPointLogs(restored.pointLogs);
+        setPaidPoints(restored.paidPoints);
+        setPointRate(restored.pointRate);
+        setChildTossId(restored.childTossId);
+        setChildBankInfo(restored.childBankInfo);
+        setParentPin(restored.parentPin);
+        syncToFirebase(restored);
+        setIsSettingsOpen(false);
+        showToast('백업 파일로 복원했어요.');
+      } catch (err) {
+        window.alert('백업 파일을 읽지 못했어요.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // Save Settings
   const handleSaveSettings = () => {
     syncToFirebase();
@@ -816,6 +891,24 @@ export default function App() {
     const d = new Date(statsMonth.year, statsMonth.month + delta, 1);
     setStatsMonth({ year: d.getFullYear(), month: d.getMonth() });
   };
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 text-center">
+        <div className="space-y-2 max-w-xs">
+          <p className="font-bold text-slate-700">
+            {loadError ? '서버에서 데이터를 불러오지 못했어요' : '데이터를 불러오는 중이에요…'}
+          </p>
+          {loadError && (
+            <p className="text-xs text-slate-500">
+              인터넷 연결을 확인하고 새로고침해 주세요. 계속 안 되면 Firestore 규칙을 확인해 주세요.
+              이 상태에서는 아무것도 저장되지 않아서 기록이 지워질 걱정은 없어요.
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans pb-12">
@@ -1915,6 +2008,24 @@ export default function App() {
                   onChange={(e) => setParentPin(e.target.value)}
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-center font-extrabold text-lg tracking-widest"
                 />
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-2">
+                <p className="text-xs font-bold text-slate-700">데이터 백업</p>
+                <p className="text-[11px] text-slate-500">
+                  숙제·포인트 기록을 파일로 저장해 두세요. (PIN도 함께 들어 있으니 다른 사람에게 보내지 마세요.)
+                </p>
+                <button
+                  type="button"
+                  onClick={handleBackupDownload}
+                  className="w-full bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs py-2.5 rounded-xl transition"
+                >
+                  백업 파일 내려받기
+                </button>
+                <label className="block w-full text-center bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs py-2.5 rounded-xl transition cursor-pointer">
+                  백업 파일로 복원하기
+                  <input type="file" accept=".json,application/json" onChange={handleRestoreFile} className="hidden" />
+                </label>
               </div>
 
               <div className="pt-2">
